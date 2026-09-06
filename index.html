@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>企鹅追击跑酷</title>
+<style>
+    body { margin: 0; overflow: hidden; background: #111; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: Arial, sans-serif; }
+    canvas { border: 2px solid #333; box-shadow: 0 0 20px rgba(0,0,0,0.8); }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas" width="800" height="400"></canvas>
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// ========== 游戏状态 ==========
+let gameStarted = false;
+let gameOver = false;
+let score = 0;
+let distance = 0;          // 跑过的距离
+let level = 1;
+let frames = 0;
+
+// ========== 玩家 ==========
+const player = {
+    x: 120,
+    y: 280,
+    width: 30,
+    height: 40,
+    velY: 0,
+    jumping: false,
+    speed: 0
+};
+
+// ========== 追击企鹅 ==========
+const chaser = {
+    x: -80,                // 初始在屏幕外
+    y: 285,
+    width: 45,
+    height: 45,
+    speed: 2.5,            // 追击速度（比玩家慢一点，但会逐渐逼近）
+    caught: false
+};
+
+// ========== 物理 ==========
+const GRAVITY = 0.7;
+const JUMP_POWER = -14;
+const GROUND_Y = 320;
+
+// ========== 背景滚动 ==========
+let bgOffset = 0;
+let gameSpeed = 5;         // 整体游戏速度（卷轴速度）
+
+// ========== 障碍物 ==========
+let obstacles = [];
+let spawnTimer = 0;
+let spawnInterval = 80;    // 每隔多少帧生成一个障碍
+
+// ========== 输入 ==========
+const keys = {};
+document.addEventListener('keydown', e => {
+    keys[e.code] = true;
+    if (e.code === 'Space') {
+        if (!gameStarted) { resetGame(); gameStarted = true; }
+        else if (gameOver) { resetGame(); }
+        else if (!player.jumping) { player.velY = JUMP_POWER; player.jumping = true; }
+    }
+});
+document.addEventListener('keyup', e => keys[e.code] = false);
+
+// ========== 生成障碍物 ==========
+function spawnObstacle() {
+    const type = Math.floor(Math.random() * 3);
+    let obs;
+    if (type === 0) { // 矮障碍（需要跳）
+        obs = { x: canvas.width + 50, y: GROUND_Y - 25, w: 25, h: 25, type: 'low' };
+    } else if (type === 1) { // 高障碍（需要蹲——暂时用跳低一点避开，简化为矮障碍）
+        obs = { x: canvas.width + 50, y: GROUND_Y - 50, w: 30, h: 50, type: 'high' };
+    } else { // 地面陷阱（必须跳）
+        obs = { x: canvas.width + 50, y: GROUND_Y - 15, w: 40, h: 15, type: 'trap' };
+    }
+    obstacles.push(obs);
+}
+
+// ========== 更新逻辑 ==========
+function update() {
+    if (!gameStarted || gameOver) return;
+    frames++;
+    score++;
+    distance += gameSpeed * 0.1;
+
+    // 关卡进阶（每 600 帧 = 约 10 秒）
+    const newLevel = Math.floor(distance / 300) + 1;
+    if (newLevel > level) {
+        level = newLevel;
+        gameSpeed += 1;
+        chaser.speed += 0.3;
+        spawnInterval = Math.max(35, spawnInterval - 8);
+    }
+
+    // ---- 玩家物理 ----
+    player.velY += GRAVITY;
+    player.y += player.velY;
+    if (player.y >= GROUND_Y - player.height) {
+        player.y = GROUND_Y - player.height;
+        player.velY = 0;
+        player.jumping = false;
+    }
+
+    // ---- 企鹅追击逻辑 ----
+    // 企鹅速度略低于卷轴速度，所以会慢慢逼近玩家
+    const chaserScreenX = chaser.x - bgOffset * 0.3;
+    const distanceToPlayer = player.x - chaserScreenX;
+
+    if (distanceToPlayer > 60) {
+        chaser.x += chaser.speed * 0.5;   // 慢慢逼近
+    }
+    // 如果距离 <= 50，被追上！
+    if (distanceToPlayer <= 50) {
+        gameOver = true;
+        chaser.caught = true;
+    }
+
+    // ---- 背景滚动 ----
+    bgOffset += gameSpeed;
+
+    // ---- 障碍物生成与移动 ----
+    spawnTimer++;
+    if (spawnTimer >= spawnInterval) {
+        spawnObstacle();
+        spawnTimer = 0;
+    }
+
+    for (let obs of obstacles) {
+        obs.x -= gameSpeed;
+    }
+    obstacles = obstacles.filter(o => o.x > -100);
+
+    // ---- 碰撞检测 ----
+    for (let obs of obstacles) {
+        // 简单的矩形碰撞
+        if (player.x < obs.x + obs.w &&
+            player.x + player.width > obs.x &&
+            player.y < obs.y + obs.h &&
+            player.y + player.height > obs.y) {
+            gameOver = true;
+        }
+    }
+}
+
+// ========== 绘制背景（滚动地面） ==========
+function drawBackground() {
+    // 天空
+    const skyGradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    skyGradient.addColorStop(0, '#1a1a2e');
+    skyGradient.addColorStop(1, '#2d2d5e');
+    ctx.fillStyle = skyGradient;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // 地面（滚动的条纹模拟速度感）
+    ctx.fillStyle = '#333';
+    ctx.fillRect(0, GROUND_Y, canvas.width, canvas.height - GROUND_Y);
+
+    // 地面上的速度线
+    ctx.fillStyle = '#555';
+    for (let i = 0; i < 20; i++) {
+        const lineX = ((i * 80) - (bgOffset * 0.5)) % (canvas.width + 80);
+        ctx.fillRect(lineX, GROUND_Y + 10, 40, 3);
+        ctx.fillRect(lineX + 40, GROUND_Y + 25, 20, 2);
+    }
+
+    // 远景建筑轮廓（视差滚动）
+    ctx.fillStyle = '#222';
+    for (let i = 0; i < 10; i++) {
+        const bx = ((i * 150) - bgOffset * 0.2) % (canvas.width + 200);
+        const bh = 60 + (i * 15) % 80;
+        ctx.fillRect(bx, GROUND_Y - bh, 80, bh);
+    }
+}
+
+// ========== 绘制玩家 ==========
+function drawPlayer() {
+    // 身体
+    ctx.fillStyle = '#4fc3f7';
+    ctx.fillRect(player.x, player.y, player.width, player.height);
+    // 头
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(player.x - 2, player.y - 12, player.width + 4, 14);
+    // 眼睛
+    ctx.fillStyle = '#000';
+    ctx.fillRect(player.x + 18, player.y - 8, 4, 4);
+    // 腿（奔跑动画）
+    const legOffset = Math.sin(frames * 0.3) * 5;
+    ctx.fillStyle = '#333';
+    ctx.fillRect(player.x + 5, player.y + player.height, 6, 8 + legOffset);
+    ctx.fillRect(player.x + 18, player.y + player.height, 6, 8 - legOffset);
+}
+
+// ========== 绘制追击企鹅 ==========
+function drawChaser() {
+    const screenX = chaser.x - bgOffset * 0.3;
+    if (screenX > -100) {
+        const py = chaser.y;
+        const px = screenX;
+
+        // 身体
+        ctx.fillStyle = '#1a1a1a';
+        ctx.beginPath();
+        ctx.ellipse(px + 22, py + 22, 20, 22, 0, 0, Math.PI * 2);
+        ctx.fill();
+        // 白肚皮
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.ellipse(px + 22, py + 26, 12, 16, 0, 0, Math.PI * 2);
+        ctx.fill();
+        // 眼睛
+        ctx.fillStyle = '#fff';
+        ctx.beginPath(); ctx.arc(px + 15, py + 14, 5, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(px + 28, py + 14, 5, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#000';
+        ctx.beginPath(); ctx.arc(px + 15, py + 14, 2.5, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(px + 28, py + 14, 2.5, 0, Math.PI * 2); ctx.fill();
+        // 嘴巴
+        ctx.fillStyle = '#ff8c00';
+        ctx.beginPath();
+        ctx.moveTo(px + 18, py + 20);
+        ctx.lineTo(px + 26, py + 20);
+        ctx.lineTo(px + 22, py + 26);
+        ctx.fill();
+        // 脚（快速摆动）
+        const footOffset = Math.sin(frames * 0.5) * 4;
+        ctx.fillRect(px + 10, py + 40, 8, 5 + footOffset);
+        ctx.fillRect(px + 26, py + 40, 8, 5 - footOffset);
+
+        // 距离警告（靠太近时闪红）
+        const dist = player.x - screenX;
+        if (dist < 150 && Math.floor(frames / 10) % 2 === 0) {
+            ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+    }
+}
+
+// ========== 绘制障碍物 ==========
+function drawObstacles() {
+    for (let obs of obstacles) {
+        if (obs.type === 'low') {
+            ctx.fillStyle = '#ff6b6b';
+        } else if (obs.type === 'high') {
+            ctx.fillStyle = '#ffa502';
+        } else {
+            ctx.fillStyle = '#ff4757';
+        }
+        ctx.fillRect(obs.x, obs.y, obs.w, obs.h);
+        // 顶部尖刺装饰
+        if (obs.type === 'trap') {
+            ctx.fillStyle = '#c0392b';
+            for (let i = 0; i < obs.w; i += 10) {
+                ctx.beginPath();
+                ctx.moveTo(obs.x + i, obs.y);
+                ctx.lineTo(obs.x + i + 5, obs.y - 8);
+                ctx.lineTo(obs.x + i + 10, obs.y);
+                ctx.fill();
+            }
+        }
+    }
+}
+
+// ========== 绘制 UI ==========
+function drawUI() {
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 16px Arial';
+    ctx.textAlign = 'left';
+    ctx.fillText(`距离: ${Math.floor(distance)}m`, 15, 25);
+    ctx.fillText(`关卡: ${level}`, 15, 45);
+    ctx.fillText(`速度: ${gameSpeed}x`, 15, 65);
+
+    // 企鹅距离指示器
+    const chaserScreenX = chaser.x - bgOffset * 0.3;
+    const dist = Math.max(0, player.x - chaserScreenX);
+    ctx.textAlign = 'right';
+    if (dist < 120) {
+        ctx.fillStyle = '#ff4757';
+        ctx.font = 'bold 18px Arial';
+        ctx.fillText('⚠ 企鹅快追上了！', canvas.width - 15, 25);
+    } else if (dist < 250) {
+        ctx.fillStyle = '#ffa502';
+        ctx.font = '14px Arial';
+        ctx.fillText(`企鹅距离: ${Math.floor(dist)}`, canvas.width - 15, 25);
+    }
+}
+
+// ========== 绘制主函数 ==========
+function draw() {
+    drawBackground();
+    drawObstacles();
+    drawPlayer();
+    drawChaser();
+    drawUI();
+
+    // 开始提示
+    if (!gameStarted) {
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#fff';
+        ctx.textAlign = 'center';
+        ctx.font = 'bold 28px Arial';
+        ctx.fillText('🐧 企鹅追击跑酷 🐧', canvas.width / 2, canvas.height / 2 - 40);
+        ctx.font = '18px Arial';
+        ctx.fillText('一只愤怒的企鹅在追你！', canvas.width / 2, canvas.height / 2);
+        ctx.font = '16px Arial';
+        ctx.fillText('【空格键】跳跃  |  【空格键】开始', canvas.width / 2, canvas.height / 2 + 35);
+        ctx.fillStyle = '#aaa';
+        ctx.font = '13px Arial';
+        ctx.fillText('越过障碍跑得越远越好，别被企鹅抓住！', canvas.width / 2, canvas.height / 2 + 65);
+    }
+
+    // 失败画面
+    if (gameOver) {
+        ctx.fillStyle = 'rgba(0,0,0,0.75)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.textAlign = 'center';
+
+        if (chaser.caught) {
+            ctx.fillStyle = '#ff4757';
+            ctx.font = 'bold 36px Arial';
+            ctx.fillText('被抓住了！🐧', canvas.width / 2, canvas.height / 2 - 30);
+            ctx.fillStyle = '#fff';
+            ctx.font = '16px Arial';
+            ctx.fillText('企鹅追上了你，游戏结束！', canvas.width / 2, canvas.height / 2 + 10);
+        } else {
+            ctx.fillStyle = '#ff4757';
+            ctx.font = 'bold 36px Arial';
+            ctx.fillText('撞到了障碍物！', canvas.width / 2, canvas.height / 2 - 30);
+        }
+
+        ctx.fillStyle = '#fff';
+        ctx.font = '18px Arial';
+        ctx.fillText(`逃跑距离: ${Math.floor(distance)}m`, canvas.width / 2, canvas.height / 2 + 40);
+        ctx.fillText(`到达关卡: ${level}`, canvas.width / 2, canvas.height / 2 + 65);
+        ctx.font = '14px Arial';
+        ctx.fillStyle = '#aaa';
+        ctx.fillText('按【空格键】重新开始', canvas.width / 2, canvas.height / 2 + 100);
+    }
+}
+
+// ========== 重置 ==========
+function resetGame() {
+    score = 0; distance = 0; level = 1; frames = 0;
+    gameSpeed = 5; spawnInterval = 80;
+    obstacles = [];
+    spawnTimer = 0;
+    player.y = GROUND_Y - player.height;
+    player.velY = 0;
+    player.jumping = false;
+    chaser.x = -80;
+    chaser.speed = 2.5;
+    chaser.caught = false;
+    gameOver = false;
+    gameStarted = true;
+}
+
+// ========== 主循环 ==========
+function gameLoop() {
+    update();
+    draw();
+    requestAnimationFrame(gameLoop);
+}
+gameLoop();
+</script>
+</body>
+</html>
